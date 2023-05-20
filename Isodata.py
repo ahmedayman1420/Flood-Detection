@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.spatial import KDTree
 
 class IsodataClustering:
     '''
@@ -178,3 +179,98 @@ class IsodataClustering:
                 cluster_2.points.append(point)
 
         return cluster_1, cluster_2
+    
+
+class IsodataClusteringV2:
+    '''
+    Isodata clustering algorithm version 2 used to segment the image
+    into n regions bases on similarity with more robust and efficient way
+    '''
+    
+    def __init__(self, num_clusters=2, max_iterations=10, min_samples_in_cluster=3, max_variance=1.0, 
+                 merge_threshold=0.9, T = 0.7):
+        self.num_clusters = num_clusters
+        self.max_iterations = max_iterations
+        self.min_samples_in_cluster = min_samples_in_cluster
+        self.max_variance = max_variance
+        self.merge_threshold = merge_threshold
+        self.centroids = []
+        self.lables = []
+        self.T = T
+        
+    def fit(self, X):
+        '''
+        Clusify the image pixels into clusters given the initial configurations
+        ### Parameters
+            - `X`The input image to be clustered
+        ### Return
+            - The image mask after clustering
+        '''
+
+        X = np.array(X)
+        self.centroids = self._initialize_centroids(X)
+        image = X.reshape((-1, 3))
+        iteration = 1
+
+        while iteration <= self.max_iterations:
+            print("{}/{} =======================> In Progress".format(iteration, self.max_iterations))
+
+            # calculate labels of the image
+            self.labels = np.linalg.norm(image[:, np.newaxis] - self.centroids[np.newaxis, :], axis=(2)).argmin(axis=1)
+            
+            # update the centroids
+            new_centroids = np.array([image[self.labels == c].mean(axis=0) for c in range(len(self.centroids))])
+
+            # split the clusters
+            if len(new_centroids) < self.num_clusters:
+                stds = np.array([image[self.labels == c].std(axis=0) for c in range(len(self.centroids))])
+                max_std_idx = np.argmax(np.amax(stds, axis=1))
+                max_std = stds[max_std_idx]
+                if np.amax(max_std) > self.max_variance:
+                    new_centroid_1 = self.centroids[max_std_idx] + max_std
+                    new_centroid_2 = self.centroids[max_std_idx] - max_std
+                    new_centroids = np.delete(new_centroids, max_std_idx, axis=0)
+                    new_centroids = np.append(new_centroids, new_centroid_1.reshape(1, 3), axis=0)
+                    new_centroids = np.append(new_centroids, new_centroid_2.reshape(1, 3), axis=0)
+
+            # merge the clusters
+            # Build a KDTree from the centroids
+            tree = KDTree(new_centroids)
+
+            distances, indices = tree.query(new_centroids, k=2)
+            
+            # get closest distance
+            closest_distance_idx = np.argmin(distances[:, 1])
+            closest_distnace = distances[closest_distance_idx, 1]
+
+            # print(new_centroids)
+            if closest_distnace < self.merge_threshold:
+                target_class_idx = indices[closest_distance_idx, 1]
+                new_merge_centroid = np.mean([new_centroids[target_class_idx], new_centroids[closest_distance_idx]], axis=0)
+                new_centroids = np.delete(new_centroids, [closest_distance_idx, target_class_idx], axis=0)
+                new_centroids = np.append(new_centroids, new_merge_centroid.reshape(1, 3), axis=0)
+
+            self.centroids = new_centroids
+            iteration += 1
+        
+        return self.labels.reshape((X.shape[0], X.shape[1]))
+                
+
+    def _initialize_centroids(self, X):
+        '''
+        Generate the initial centroids, by interpolate 
+        equidistant points between first two points 
+        generated from the mean and std values of the
+        points
+        ### Parameters:
+            - X: array_ of points `Image`
+        ### Returns:
+            - `Initial Centriods`
+        '''
+        mean = np.mean(X, axis=(0, 1))
+        std = np.std(X, axis=(0, 1))
+        point_1 = np.array(mean - std)
+        point_2 = np.array(mean + std)
+        return np.linspace(point_1, point_2, self.num_clusters)
+
+    
